@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { message } from "antd";
 import {
   fetchEnvironment,
@@ -6,8 +6,10 @@ import {
   movePlayer,
   restartEnvironment,
   streamAgentCommand,
+  interactEnvironment,
   type AgentStreamEvent,
   type EnvironmentData,
+  type MysticalObject,
 } from "../api";
 import type { ChatMessage } from "../component/Chatbox";
 import type { MoveLog } from "../component/HistoryPanel";
@@ -19,9 +21,12 @@ export type UseGameControllerReturn = {
   history: MoveLog[];
   envData: EnvironmentData | null;
   restartLoading: boolean;
+  interactLoading: boolean;
+  currentObject: MysticalObject | null;
   handleMove: (dx: number, dy: number, note?: string) => Promise<void>;
   onSendToAgent: (text: string) => Promise<void>;
   handleRestartEnv: () => Promise<void>;
+  handleInteract: (actionId?: string) => Promise<void>;
 };
 
 export function useGameController(): UseGameControllerReturn {
@@ -31,6 +36,36 @@ export function useGameController(): UseGameControllerReturn {
   const [history, setHistory] = useState<MoveLog[]>([]);
   const [envData, setEnvData] = useState<EnvironmentData | null>(null);
   const [restartLoading, setRestartLoading] = useState(false);
+  const [interactLoading, setInteractLoading] = useState(false);
+
+  const currentObject = useMemo<MysticalObject | null>(() => {
+    if (!envData?.objects?.length) return null;
+    return (
+      envData.objects.find((obj) => obj.pos && obj.pos.x === pos.x && obj.pos.y === pos.y) ?? null
+    );
+  }, [envData, pos]);
+
+  const updateEnvObject = useCallback((updated: MysticalObject) => {
+    setEnvData((env) => {
+      if (!env) return env;
+      const objects = [...env.objects];
+      let matched = false;
+      if (updated.pos) {
+        for (let i = 0; i < objects.length; i++) {
+          const obj = objects[i];
+          if (obj.pos && updated.pos && obj.pos.x === updated.pos.x && obj.pos.y === updated.pos.y) {
+            objects[i] = { ...obj, ...updated };
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        objects.push(updated);
+      }
+      return { ...env, objects };
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +108,55 @@ export function useGameController(): UseGameControllerReturn {
     []
   );
 
+  const handleInteract = useCallback(
+    async (actionId?: string) => {
+      const target = currentObject;
+      if (!target) {
+        message.info("当前位置没有可交互的对象。");
+        return;
+      }
+      const resolvedAction = actionId ?? target.actions?.[0]?.id;
+      setInteractLoading(true);
+      try {
+        const result = await interactEnvironment(resolvedAction);
+        const feedback = result.message ?? (result.ok ? "交互完成" : "交互失败");
+        setMessages((m) => [
+          ...m,
+          { role: "system", text: feedback },
+        ]);
+        if (result.object) {
+          updateEnvObject(result.object);
+          if (result.object.pos) {
+            const noteLabel = `${result.ok ? "Interact" : "Interact fail"}: ${
+              result.object?.name ?? target.name
+            }`;
+            setHistory((h) => [
+              ...h,
+              {
+                ts: Date.now(),
+                x: result.object!.pos!.x,
+                y: result.object!.pos!.y,
+                note: noteLabel,
+              },
+            ]);
+          }
+        }
+        if (!result.ok) {
+          message.warning(feedback);
+        } else {
+          message.success(feedback);
+        }
+      } catch (err) {
+        console.error("Interact failed", err);
+        message.error("交互失败");
+        setMessages((m) => [...m, { role: "system", text: "⚠️ 交互失败" }]);
+      } finally {
+        setInteractLoading(false);
+      }
+    },
+    [currentObject, updateEnvObject]
+  );
+
   const onSendToAgent = useCallback(
     async (text: string) => {
       console.log("[WEB] onSendToAgent", text);
@@ -109,6 +193,13 @@ export function useGameController(): UseGameControllerReturn {
               });
               setEnvData((env) => (env ? { ...env, player: { x: stepPos.x, y: stepPos.y } } : env));
             }
+            if (event.object) {
+              updateEnvObject(event.object);
+              appendMessage({
+                role: "system",
+                text: `对象 ${event.object.name} 状态：${JSON.stringify(event.object.state ?? {})}`,
+              });
+            }
             if (event.info && !event.pos) {
               appendMessage({ role: "system", text: event.info });
             }
@@ -142,7 +233,7 @@ export function useGameController(): UseGameControllerReturn {
         setAgentBusy(false);
       }
     },
-    []
+    [updateEnvObject]
   );
 
   const handleRestartEnv = useCallback(async () => {
@@ -170,8 +261,11 @@ export function useGameController(): UseGameControllerReturn {
     history,
     envData,
     restartLoading,
+    interactLoading,
+    currentObject,
     handleMove,
     onSendToAgent,
     handleRestartEnv,
+    handleInteract,
   };
 }

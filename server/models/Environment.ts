@@ -8,6 +8,20 @@ const ObjectSchema = new Schema(
     name: { type: String, required: true },
     pos: { x: { type: Number, required: true }, y: { type: Number, required: true } },
     interactVerb: { type: String, default: "use" },
+    description: { type: String },
+    state: { type: Schema.Types.Mixed, default: {} },
+    actions: {
+      type: [
+        {
+          id: { type: String, required: true },
+          label: { type: String, required: true },
+          verb: { type: String },
+          description: { type: String },
+          requires: [{ type: String }],
+        },
+      ],
+      default: [],
+    },
   },
   { _id: false }
 );

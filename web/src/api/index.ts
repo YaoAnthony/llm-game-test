@@ -9,16 +9,43 @@ const api = axios.create({
 export type AgentStreamEvent =
   | { type: "status"; message: string }
   | { type: "action"; action: string; args?: Record<string, unknown> }
-  | { type: "step"; pos?: { x: number; y: number } | null; ok?: boolean; info?: string; hint?: string | null }
+  | { type: "step"; pos?: { x: number; y: number } | null; ok?: boolean; info?: string; hint?: string | null; object?: MysticalObject | null }
   | { type: "completion"; summary?: string; pos?: { x: number; y: number } | null }
   | { type: "error"; message: string };
+
+export type MysticalObjectAction = {
+  id: string;
+  label: string;
+  verb?: string;
+  description?: string;
+  requires?: string[];
+};
+
+export type MysticalObject = {
+  type: string;
+  name: string;
+  pos?: { x: number; y: number } | null;
+  interactVerb?: string;
+  description?: string;
+  state?: Record<string, unknown> | null;
+  actions?: MysticalObjectAction[];
+};
 
 export type EnvironmentData = {
   width: number;
   height: number;
   player: { x: number; y: number } | null;
   obstacles: Array<{ x: number; y: number }>;
-  objects: Array<{ type: string; name: string; pos?: { x: number; y: number } | null }>;
+  objects: MysticalObject[];
+};
+
+export type InteractResponse = {
+  ok: boolean;
+  message: string;
+  consumed?: boolean;
+  object?: MysticalObject | null;
+  availableActions?: MysticalObjectAction[];
+  events?: Array<{ type: string; payload?: unknown }>;
 };
 
 // 获取状态（REST）
@@ -79,6 +106,11 @@ export async function streamAgentCommand(
           });
           break;
         case "step":
+          {
+            const objectPayload =
+              ((payload as any)?.payload?.object as MysticalObject | null | undefined) ??
+              ((payload as any)?.object as MysticalObject | null | undefined) ??
+              null;
           onEvent({
             type: "step",
             pos:
@@ -94,8 +126,10 @@ export async function streamAgentCommand(
             hint:
               ((payload as any)?.payload?.hint as string | null | undefined) ??
               ((payload as any)?.hint as string | null | undefined) ??
-              null,
+                null,
+              object: objectPayload,
           });
+          }
           break;
         case "completion":
           finalState.summary =
@@ -175,6 +209,12 @@ export async function restartEnvironment(): Promise<EnvironmentData> {
     return data.env as EnvironmentData;
   }
   return data as EnvironmentData;
+}
+
+export async function interactEnvironment(actionId?: string): Promise<InteractResponse> {
+  const payload = actionId ? { actionId } : {};
+  const { data } = await api.post("/api/env/interact", payload);
+  return data;
 }
 
 

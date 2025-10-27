@@ -66,12 +66,12 @@ export default class MyAgent {
             "interact",
             {
                 title: "Interact on current tile",
-                description: "Interact with object on the current tile (e.g., coffee machine).",
-                inputSchema: {},
+                description: "Interact with object on the current tile. Use optional actionId (e.g., brew / inspect).",
+                inputSchema: { actionId: z.string().optional() },
                 outputSchema: {},
             },
-            async () => {
-                const data = await interactService();
+            async ({ actionId }) => {
+                const data = await interactService(actionId);
                 return {
                 content: [{ type: "text", text: JSON.stringify(data) }],
                 structuredContent: data as Record<string, unknown>,

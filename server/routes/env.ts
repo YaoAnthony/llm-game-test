@@ -1,6 +1,8 @@
 // server/routes/env.ts
 import { Router } from "express";
 import { senseService, moveWithCollision, interactService, resetEnv, ensureEnv, ensureEnvDoc } from "../services/env.js";
+import { createMysticalObject } from "../services/mysticalObjects.js";
+import type { SerializedMysticalObject } from "../types/environment.js";
 
 export default function envRouter() {
     const router = Router();
@@ -8,12 +10,17 @@ export default function envRouter() {
     router.get("/", async (_req, res) => {
         try {
             const env = await ensureEnv();
+            const normalizedObjects = (env.objects ?? []).map((obj: any) => {
+                const raw = (typeof obj?.toObject === "function" ? obj.toObject() : obj) as SerializedMysticalObject;
+                return createMysticalObject(raw).toJSON();
+            });
+
             res.json({
                 width: env.width,
                 height: env.height,
                 player: env.player ?? null,
                 obstacles: env.obstacles ?? [],
-                objects: env.objects ?? [],
+                objects: normalizedObjects,
             });
         } catch (err) {
             console.error("Env snapshot failed", err);
@@ -33,8 +40,10 @@ export default function envRouter() {
         res.json(result);
     });
 
-    router.post("/interact", async (_req, res) => {
-        const result = await interactService();
+    router.post("/interact", async (req, res) => {
+        const actionIdRaw = req.body?.actionId;
+        const actionId = typeof actionIdRaw === "string" && actionIdRaw.length > 0 ? actionIdRaw : undefined;
+        const result = await interactService(actionId);
         res.json(result);
     });
 

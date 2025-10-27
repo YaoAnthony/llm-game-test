@@ -32,7 +32,7 @@ export default function HistoryPanel({ moves, height = 220 }: Props) {
   const latestId = moves[moves.length - 1]?.ts;
 
   return (
-    <Card title="History" size="small" bordered>
+  <Card title="History" size="small" variant="outlined">
       <div
         ref={containerRef}
         style={{ maxHeight: height, overflowY: "auto", paddingRight: 4 }}

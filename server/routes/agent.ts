@@ -4,6 +4,7 @@ import type { Deps } from "./index.js";
 import { agent } from "../services/agent.js";
 import OpenAI from "openai";
 import { senseService, moveWithCollision, interactService } from "../services/env.js";
+import type { MysticalObjectAction } from "../types/environment.js";
 // types
 import type { StreamEvent } from "../types/index.js";
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -406,19 +407,29 @@ export default function agentRouter(_deps: Deps) {
                     }
 
                     if (toolName === "interact") {
-                        const result = await interactService();
+                        const actionId = typeof args.actionId === "string" ? args.actionId : undefined;
+                        const result = await interactService(actionId);
                         messages.push({
                             role: "tool",
                             tool_call_id: toolCall.id,
                             content: JSON.stringify(result),
                         });
                         console.log("[AGENT] Tool interact result", result);
+                        if ("object" in result && result.object) {
+                            const actionList =
+                                result.object.actions?.map((act: MysticalObjectAction) => act.id).join(", ") || "无";
+                            messages.push({
+                                role: "system",
+                                content: `交互对象：${result.object.name} (${result.object.type})，可选操作：${actionList}。状态：${JSON.stringify(result.object.state ?? {})}`,
+                            });
+                        }
                         send({
                             type: "step",
                             payload: {
                                 pos: currentPos ?? null,
                                 ok: result.ok,
                                 info: result.message,
+                                object: "object" in result ? result.object ?? null : null,
                             },
                         });
                         continue;
