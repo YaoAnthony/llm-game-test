@@ -1,0 +1,21 @@
+{
+  "name": "llm-game-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "concurrently -n \"SERVER,WEB\" -c \"green,cyan\" \"npm run dev --workspace server\" \"npm run dev --workspace web\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "concurrently": "^9.2.1",
+    "openai": "^6.7.0"
+  }
+}
