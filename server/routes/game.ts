@@ -1,35 +1,22 @@
-// server/routes/game.ts
 import { Router } from "express";
-import { getStateService, moveService } from "../services/game.js";
+import type Game from "../Game/index.js";
 
-export default function gameRouter() {
-    const router = Router();
+export type GameRouteDeps = {
+	game: Game;
+};
 
-    router.get("/state", async (_req, res) => {
-        try {
-        const result = await getStateService();
-        res.json(result);
-        } catch {
-        res.status(500).json({ message: "Failed to get state" });
-        }
-    });
+export function gameRouter({ game }: GameRouteDeps) {
+	const router = Router();
 
-    router.post("/move", async (req, res) => {
-        try {
-            const { dx, dy } = req.body ?? {};
-            if (typeof dx !== "number" || typeof dy !== "number") {
-                return res.status(400).json({ message: "dx/dy must be numbers" });
-            }
-            const result = await moveService(dx, dy);
-            res.json(result);
-        } catch (err: any) {
-            const reason = err?.result?.reason ?? err?.message ?? "Failed to move";
-            const pos = err?.result?.pos ?? null;
-            const hint = err?.result?.hint ?? null;
-            console.warn("[GAME] move failed", reason, hint);
-            res.status(400).json({ message: reason, pos, hint });
-        }
-    });
+	router.get("/world", (_req, res) => {
+		try {
+			const snapshot = game.getWorldData();
+			res.json(snapshot);
+		} catch (err) {
+			console.error("Failed to produce world snapshot", err);
+			res.status(500).json({ message: "Failed to load world snapshot" });
+		}
+	});
 
-    return router;
+	return router;
 }
