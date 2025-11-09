@@ -1,5 +1,5 @@
 // server/Game/index.ts
-import WeatherManager from "./World/weatherManager";
+import WeatherManager from "./World/WeatherManager";
 import WorldManager from "./World/WorldManager";
 import TimeManager from "./World/TimeManager";
 
@@ -7,11 +7,19 @@ import InteractionManager from "./Interaction/InteractionManager";
 import AgentManager from "./AgentFactory/AgentManager";
 import { GameWorldStateModel } from "../Models/GameWorldState.js";
 import type { GameWorldStateDocument } from "../Models/GameWorldState.js";
-import type { GameTimeSnapshot } from "../Types/game.js";
+import { WorldMapModel } from "../Models/WorldMap.js";
+import type { GameTimeSnapshot } from "../types/game.js";
 
 //utils
-import { TimeOfDay } from "../Types/weather.js";
+import { TimeOfDay } from "../types/weather.js";
 import { describeWeather } from "./World/utils.js";
+
+// Service Layer
+import { PlayerService } from "./Services/PlayerService.js";
+import { PlayerRepository } from "./Repositories/PlayerRepository.js";
+
+// types
+
 
 /**
  * 《我的世界》式的“主世界控制台”。
@@ -33,13 +41,27 @@ export default class Game {
     private timeManager: TimeManager;
     /** 交互管理器 -> 玩家与方块、NPC 的交互中心。 */
     private interactionManager: InteractionManager;
-    /** Agent 管理器 -> 管理所有“冒险家/玩家”实体。 */
+    /** Agent 管理器 -> 管理所有"冒险家/玩家"实体。 */
     private agentManager: AgentManager;
 
-    /** 自动存档的定时器句柄。输出：正在运行的 setInterval；为空表示未启动。 */
-    private saveTimer: NodeJS.Timeout | null = null;
+    /** 玩家服务 -> 处理玩家相关的业务逻辑（使用 Repository 模式） */
+    private playerService: PlayerService;
+
+    // ⚠️ 架构重构：移除独立的 saveTimer，改为在游戏循环中定期检查
+    // private saveTimer: ReturnType<typeof setInterval> | null = null;
+    
+    /** 游戏主循环定时器（统一管理所有系统更新） */
+    private gameLoopTimer: ReturnType<typeof setInterval> | null = null;
+    /** 游戏主循环间隔（毫秒）。默认 50ms = 20 TPS (Ticks Per Second) */
+    private readonly gameLoopIntervalMs = 50;
+    /** 上次更新时间戳 */
+    private lastUpdateTime: number = Date.now();
+    /** 上次自动存档时间戳 */
+    private lastSaveTime: number = Date.now();
     /** 自动存档间隔（毫秒）。默认 60_000ms = 现实 1 分钟。 */
     private readonly autoSaveIntervalMs = 60_000;
+    /** Tick 事件监听器列表 */
+    private tickListeners: Array<() => void> = [];
 
     /**
      * 获取单例。
@@ -66,7 +88,8 @@ export default class Game {
         // 初始化游戏状态（ 从MongoDB加载对应的数据）
 
         // 启动时间管理器(如果数据库有时间，则从数据库加载，否则初始化默认时间)
-        this.timeManager = new TimeManager();
+        // 使用 50ms 的 tick 间隔以匹配游戏循环的 20 TPS
+        this.timeManager = new TimeManager(undefined, { tickIntervalMs: 50 });
         this.weatherManager = new WeatherManager();
 
         // 监听时间变化以更新天气
@@ -77,33 +100,43 @@ export default class Game {
         });
 
         // 初始化环境（ 从MongoDB加载对应的数据）
-        this.worldManager = new WorldManager();
+        this.worldManager = new WorldManager(this.gameId, 50, 50); // 创建 50x50 的世界
 
         // 初始化玩家列表
-        this.interactionManager = new InteractionManager();
         this.agentManager = new AgentManager();
+        
+        // 初始化玩家服务（使用 Repository + Service 模式）
+        const playerRepository = new PlayerRepository();
+        this.playerService = new PlayerService(this.gameId, this.agentManager, playerRepository);
+        
+        // 初始化交互系统（需要依赖 worldManager 和 agentManager）
+        this.interactionManager = new InteractionManager(this.worldManager, this.agentManager);
 
     }
 
     /**
-     * 手动推进一帧世界时间。
+     * 手动推进一帧世界时间（调试用）。
      * - 输入：无（通常由调试或内部循环调用）。
      * - 输出：无返回，但会更新 TimeManager 的 tick 和昼夜状态。
+     * 
+     * ⚠️ 注意：现在由 update() 统一调用 timeManager.advance(deltaTime)
      */
     tick() {
-        this.timeManager.advance();
+        this.timeManager.advance(this.gameLoopIntervalMs);
     }
 
     /**
      * 初始化世界：
      * 1. 从 MongoDB 读取 worldId 对应的时间存档。
-     * 2. 恢复世界时间并启动自动 tick。
-     * 3. 开启自动存档（每分钟写回数据库）。
+     * 2. 从 MongoDB 加载玩家数据。
+     * 3. 激活时间系统（不启动独立定时器）。
+     * 4. 启动统一的游戏主循环（包含时间推进和自动存档）。
      */
     async init() {
         await this.loadWorldState();
-        this.timeManager.start();
-        this.startAutoSave();
+        await this.playerService.restoreAllPlayers();
+        this.timeManager.start(); // 只激活状态，不启动定时器
+        this.startGameLoop(); // 启动统一的游戏循环
     }
 
     /**
@@ -148,6 +181,7 @@ export default class Game {
      */
     getWorldData() {
         const currentWeather = this.weatherManager.getWeather();
+        const mapData = this.worldManager.getMapData(); // ✅ 获取地形数据
 
         return {
             worldId: this.gameId,
@@ -162,6 +196,7 @@ export default class Game {
                 current: currentWeather,
                 description: describeWeather(currentWeather),
             },
+            map: mapData, // ✅ 添加地图数据
             meta: {
                 autoSaveIntervalMs: this.autoSaveIntervalMs,
             },
@@ -170,14 +205,86 @@ export default class Game {
 
     /**
      * 关闭世界：
-     * - 停止 tick 循环与自动存档。
-     * - 立即把最新世界时间写回 MongoDB，确保不会丢档。
+     * - 停止时间系统和游戏主循环。
+     * - 立即把最新世界时间和玩家数据写回 MongoDB，确保不会丢档。
      */
     async shutdown() {
         this.timeManager.stop();
-        this.stopAutoSave();
+        this.stopGameLoop();
         await this.saveWorldState();
+        await this.playerService.saveAllPlayers();
+        console.log("🛑 Game world shutdown complete");
     }
+
+    // ===== 玩家管理接口 =====
+    // ===== 玩家管理接口（委托给 PlayerService）=====
+
+    /**
+     * 创建新玩家并加入游戏
+     */
+    async createPlayer(params: import("../types/agent.js").CreatePlayerParams) {
+        return await this.playerService.createPlayer(params);
+    }
+
+    /**
+     * 获取玩家快照信息
+     */
+    async getPlayer(playerId: string) {
+        return await this.playerService.getPlayer(playerId);
+    }
+
+    /**
+     * 获取玩家实体（用于操作）
+     */
+    getPlayerAgent(playerId: string) {
+        return this.agentManager.getPlayer(playerId);
+    }
+
+    /**
+     * 移除玩家
+     */
+    async removePlayer(playerId: string) {
+        return await this.playerService.removePlayer(playerId);
+    }
+
+    /**
+     * 获取所有在线玩家
+     */
+    getAllPlayers() {
+        return this.playerService.getAllPlayers();
+    }
+
+    /**
+     * 获取在线玩家数量
+     */
+    getPlayerCount() {
+        return this.playerService.getPlayerCount();
+    }
+
+    /**
+     * 获取指定范围内的玩家
+     */
+    getPlayersInRange(x: number, y: number, z: number, radius: number) {
+        return this.playerService.getPlayersInRange({ x, y, z }, radius);
+    }
+
+    // ===== 世界管理接口 =====
+
+    /**
+     * 获取世界管理器（用于访问地形）
+     */
+    getWorldManager() {
+        return this.worldManager;
+    }
+
+    /**
+     * 处理玩家交互
+     */
+    handleInteraction(request: import("./Interaction/InteractionManager.js").InteractionRequest) {
+        return this.interactionManager.handleInteraction(request);
+    }
+
+    // ===== 私有方法 =====
 
     /**
      * 从数据库加载世界时间。
@@ -219,24 +326,153 @@ export default class Game {
         );
     }
 
+
     /**
-     * 开启自动存档，就像 Minecraft 的“自动保存世界”机制。
-     * 每隔 autoSaveIntervalMs（默认 1 分钟）写入一次 MongoDB。
+     * 保存地形脏数据（仅保存发生变化的地形瓦片）
+     * 在游戏循环中调用，性能更好
      */
-    private startAutoSave() {
-        if (this.saveTimer) return;
-        this.saveTimer = setInterval(() => {
-            this.saveWorldState().catch((err) => {
-                console.error("Failed to persist world state", err);
-            });
-        }, this.autoSaveIntervalMs);
+    private async saveDirtyTerrain() {
+        try {
+            if (!this.worldManager.hasDirtyData()) {
+                return; // 没有脏数据，跳过
+            }
+
+            const dirtyTiles = this.worldManager.getDirtyTiles();
+            
+            if (dirtyTiles.length === 0) {
+                return;
+            }
+
+            // 将脏数据瓦片转换为MongoDB更新操作
+            const updateOps = dirtyTiles.map(({ pos, tile }) => ({
+                position: pos,
+                tileData: tile,
+            }));
+
+            // 更新或创建世界地图文档
+            await WorldMapModel.findOneAndUpdate(
+                { worldId: this.gameId },
+                {
+                    $set: {
+                        dirtyChunks: updateOps,
+                        updatedAt: new Date(),
+                    },
+                    $setOnInsert: {
+                        width: this.worldManager.width,
+                        height: this.worldManager.height,
+                        createdAt: new Date(),
+                    },
+                },
+                { upsert: true, new: true }
+            );
+
+            // 清除脏数据标记
+            this.worldManager.clearDirtyFlags();
+            
+            console.log(`🗺️ Saved ${dirtyTiles.length} dirty terrain tiles to database`);
+        } catch (err) {
+            console.error("❌ Failed to save dirty terrain to database:", err);
+        }
     }
 
-    /** 停止自动存档，常用于服务器优雅关停。 */
-    private stopAutoSave() {
-        if (!this.saveTimer) return;
-        clearInterval(this.saveTimer);
-        this.saveTimer = null;
+    // ⚠️ 已删除 startAutoSave 和 stopAutoSave
+    // 自动存档逻辑已整合到 update() 方法中
+
+    /**
+     * 启动游戏主循环（统一管理所有系统）
+     * 类似 Minecraft 的 20 TPS (Ticks Per Second) 机制
+     * 每 50ms 更新一次所有游戏系统
+     */
+    private startGameLoop() {
+        if (this.gameLoopTimer) return;
+
+        this.lastUpdateTime = Date.now();
+        this.lastSaveTime = Date.now();
+
+        this.gameLoopTimer = setInterval(() => {
+            const now = Date.now();
+            const deltaTime = now - this.lastUpdateTime;
+            this.lastUpdateTime = now;
+
+            this.update(deltaTime);
+        }, this.gameLoopIntervalMs);
+
+        console.log(`🔄 Game loop started (${1000 / this.gameLoopIntervalMs} TPS)`);
+    }
+
+    /**
+     * 停止游戏主循环
+     */
+    private stopGameLoop() {
+        if (!this.gameLoopTimer) return;
+        clearInterval(this.gameLoopTimer);
+        this.gameLoopTimer = null;
+        console.log("⏸️  Game loop stopped");
+    }
+
+    /**
+     * 游戏主更新函数（统一驱动所有系统）
+     * 在这里驱动所有游戏子系统的更新
+     * @param deltaTime 距离上次更新的毫秒数
+     */
+    private update(deltaTime: number) {
+        try {
+            // 0. ✅ 推进时间系统（由游戏循环统一驱动）
+            this.timeManager.advance(deltaTime);
+
+            // 1. 更新所有玩家（AI 逻辑、状态检查等）
+            this.agentManager.updateAll(deltaTime);
+
+            // 2. 更新交互系统（延迟交互、作物生长等）
+            this.interactionManager.update(deltaTime);
+
+            // 3. 更新世界系统（地形变化、资源再生等）
+            this.worldManager.update(deltaTime);
+
+            // 4. 触发 tick 事件监听器（用于 WebSocket 实时推送等）
+            this.emitTick();
+
+            // 5. 保存脏数据（有变化的玩家）
+            if (this.agentManager.getDirtyPlayers().length > 0) {
+                setImmediate(() => {
+                    this.playerService.saveDirtyPlayers().catch(err => {
+                        console.error("Failed to save dirty players", err);
+                    });
+                });
+            }
+
+            // 6. 保存脏数据（有变化的地形）
+            if (this.worldManager.hasDirtyData()) {
+                setImmediate(() => {
+                    this.saveDirtyTerrain().catch(err => {
+                        console.error("Failed to save dirty terrain", err);
+                    });
+                });
+            }
+
+            // 7. ✅ 定期自动存档（替代独立的 saveTimer）
+            const now = Date.now();
+            if (now - this.lastSaveTime >= this.autoSaveIntervalMs) {
+                this.lastSaveTime = now;
+                setImmediate(() => {
+                    this.saveWorldState().catch(err => {
+                        console.error("Failed to persist world state", err);
+                    });
+                    this.playerService.saveAllPlayers().catch(err => {
+                        console.error("Failed to persist players", err);
+                    });
+                });
+            }
+
+            // TODO: 添加更多系统更新
+            // - 物理系统
+            // - 碰撞检测
+            // - NPC AI
+            // - 战斗系统
+            // - 任务系统
+        } catch (err) {
+            console.error("❌ Error in game update loop:", err);
+        }
     }
 
     /**
@@ -249,7 +485,7 @@ export default class Game {
             tick: doc.tick ?? 0,
             timeOfDay: (doc.timeOfDay as TimeOfDay) ?? TimeOfDay.Day,
             speedMultiplier: doc.speedMultiplier ?? 1,
-            tickIntervalMs: doc.tickIntervalMs ?? 1000,
+            tickIntervalMs: doc.tickIntervalMs ?? 50, // 默认 50ms 以匹配游戏循环
             lastUpdatedAt: doc.lastUpdatedAt instanceof Date
                 ? doc.lastUpdatedAt.toISOString()
                 : new Date(doc.lastUpdatedAt ?? Date.now()).toISOString(),
@@ -269,6 +505,27 @@ export default class Game {
             tickIntervalMs: snapshot.tickIntervalMs,
             lastUpdatedAt: new Date(snapshot.lastUpdatedAt),
         };
+    }
+
+    /**
+     * 注册 tick 事件监听器
+     * @param callback 每个 game tick 触发的回调函数
+     */
+    public onTick(callback: () => void): void {
+        this.tickListeners.push(callback);
+    }
+
+    /**
+     * 触发所有 tick 事件监听器
+     */
+    private emitTick(): void {
+        this.tickListeners.forEach(callback => {
+            try {
+                callback();
+            } catch (error) {
+                console.error("Error in tick listener:", error);
+            }
+        });
     }
 
 }

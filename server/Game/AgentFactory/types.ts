@@ -1,9 +1,11 @@
 
+import type { AgentStatus as SharedAgentStatus } from "../../../shared/player.js";
+
 // ****** Agent ******
 export type Agent = {
     
 }
-export type AgentStatus = "idle" | "moving" | "thinking" | "error";
+export type AgentStatus = SharedAgentStatus;
 
 
 export type AgentMemoryFragment = {

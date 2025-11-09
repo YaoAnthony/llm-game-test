@@ -1,4 +1,4 @@
-import type { WeatherType } from "../../Types/weather";
+import type { WeatherType } from "../../types/weather.js";
 
 /**
  * 定义天气状态机：

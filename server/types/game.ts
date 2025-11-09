@@ -1,4 +1,4 @@
-import type { TimeOfDay } from "./weather";
+import type { TimeOfDay } from "./weather.js";
 
 export interface GameTimeSnapshot {
 	tick: number;

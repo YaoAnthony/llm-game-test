@@ -1,5 +1,5 @@
-import { WeatherType, Weather } from "../../Types/weather";
 
+import { WeatherType, Weather } from "../../types/weather.js";
 //util 
 import { getNextWeather } from "./utils";
 

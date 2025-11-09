@@ -1,7 +1,25 @@
 /**
  * Agent 抽象基类。
- * 可以将它想象成《我的世界》里一名被脚本控制的“冒险家”，
+ * 可以将它想象成《我的世界》里一名被脚本控制的"冒险家"，
  * 负责同步自身的状态、记忆以及背包，并与游戏世界进行互动。
+ * 
+ * ⚠️ 架构问题分析：
+ * 
+ * 1. 过度设计 (Over-Engineering)
+ *    - 设计了完整的 repository/memory/inventory 系统，但实际只使用了 id 和 status
+ *    - PlayerAgent 在构造时传入 null 或空 mock 对象
+ *    - remember/forget/addInventory 等方法从未被调用
+ * 
+ * 2. 违反 YAGNI 原则 (You Aren't Gonna Need It)
+ *    - 提前实现了未来可能用到的功能，增加了代码复杂度
+ *    - 持久化逻辑标注 TODO 但从未实现
+ * 
+ * 3. 建议重构方向：
+ *    - 选项 A：删除未使用的功能，简化为只包含 id/status/基础方法的轻量级基类
+ *    - 选项 B：完整实现 repository/memory/inventory，使其真正可用
+ *    - 选项 C：将这些功能改为可选插件，按需注入
+ * 
+ * 当前状态：保留代码但标注未使用，便于后续决策
  */
 import type {
     AgentOptions,
@@ -20,13 +38,22 @@ import type { InventoryManager } from "../Inventory";
 export class AbstractAgent {
     // 冒险家唯一编号，就像给每个《我的世界》玩家分配的 UUID。
     private readonly id: string;
-    // 当前行动状态，类似玩家是否处于“闲置”“挖矿”或“战斗”状态。
+    // 当前行动状态，类似玩家是否处于"闲置""挖矿"或"战斗"状态。
     private status: AgentStatus;
-    // 持久化仓库，负责把冒险家的资料写回“服务器存档”。
+    
+    // ⚠️ 未使用的功能 - 架构问题
+    // 以下三个属性在 PlayerAgent 中传入 null 或空 mock 对象，实际从未被使用：
+    
+    // 持久化仓库，负责把冒险家的资料写回"服务器存档"。
+    // 问题：PlayerAgent 构造时传入 null，所有持久化逻辑未实现
     private readonly repository: AgentRepository;
-    // 记忆管理器，对应玩家脑中的“笔记本”，记录遇到的村庄、怪物等信息。
+    
+    // 记忆管理器，对应玩家脑中的"笔记本"，记录遇到的村庄、怪物等信息。
+    // 问题：PlayerAgent 构造时传入空 mock，remember/forget 方法从未调用
     private readonly memory: MemoryManager;
+    
     // 背包管理器，对标玩家背包格子里的方块和道具。
+    // 问题：PlayerAgent 构造时传入空 mock，addInventory/removeInventory 方法从未调用
     private readonly inventory: InventoryManager;
 
 

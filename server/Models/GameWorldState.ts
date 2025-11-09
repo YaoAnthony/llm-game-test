@@ -26,7 +26,7 @@ const TimeSnapshotSchema = new Schema({
  * - environment 预留用于未来扩展（地形、天气种子等）。
  */
 const GameWorldStateSchema = new Schema({
-    worldId: { type: String, required: true, unique: true, index: true },
+    worldId: { type: String, required: true, unique: true },
     time: { type: TimeSnapshotSchema, required: true },
     environment: { type: Schema.Types.Mixed, default: {} },
 }, { timestamps: true });

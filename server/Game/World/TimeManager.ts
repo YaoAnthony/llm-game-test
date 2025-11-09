@@ -1,5 +1,5 @@
-import { TimeOfDay } from "../../Types/weather";
-import type { GameTimeSnapshot, StartTimeConfig } from "../../Types/game";
+import { TimeOfDay } from "../../types/weather.js";
+import type { GameTimeSnapshot, StartTimeConfig } from "../../types/game.js";
 
 /**
  * 时间管理器
@@ -24,7 +24,8 @@ export default class TimeManager {
     private readonly ticksPerDay: number; // 一个昼夜由多少个 tick 组成（默认 240）
 
     private lastUpdatedAt: number; // 上一次推进 tick 时的真实时间戳（毫秒）
-    private timer: NodeJS.Timeout | null = null;
+    
+    private isActive: boolean = false; // 标记时间系统是否激活
 
     /**
      * @param snapshot 输入：可选的数据库快照，类似服务器重启后读到的 level.dat 时间信息。
@@ -48,16 +49,14 @@ export default class TimeManager {
      * 相当于在 MC 服务器里开启一个后台时钟，按既定速率不断触发“世界心跳”。
      */
     start() {
-        if (this.timer) return;
+        if (this.isActive) return;
         this.lastUpdatedAt = Date.now();
-        this.timer = setInterval(() => this.advance(), this.tickIntervalMs);
+        this.isActive = true;
     }
 
     /** 停止自动推进 —— 类似暂停服务器时间 */
     stop() {
-        if (!this.timer) return;
-        clearInterval(this.timer);
-        this.timer = null;
+        this.isActive = false;
     }
 
     /**
@@ -65,36 +64,21 @@ export default class TimeManager {
      * 可类比检测 Minecraft 服务器的 `isDedicatedServerRunning()`。
      */
     isRunning() {
-        return Boolean(this.timer);
+        return this.isActive;
     }
 
     /**
-     * 手动推进时间。
-     * @param forceTicks 输入：可选的强制推进 tick 数（默认根据真实时间推算）。
-     * - 如果传入 forceTicks，就像命令 `/time add <tick>`，立刻推进指定步数。
-     * - 如果不传，则会根据现实流逝的毫秒数乘上 speedMultiplier 自动折算。
-     * 输出：无显式返回，但会内部调用 applyTickAdvance 更新状态。
+     * 手动推进时间（由 Game 主循环调用）
+     * @param deltaTime 输入：距离上次更新的毫秒数（由游戏循环传入）
      */
-    advance(forceTicks?: number) {
-        const now = Date.now();
-
-        let ticksToAdvance: number;
-
-        if (typeof forceTicks === "number") {
-            ticksToAdvance = forceTicks;
-            this.lastUpdatedAt = now;
-        } else {
-            const elapsedMs = now - this.lastUpdatedAt;
-            if (elapsedMs <= 0) return;
-
-            const scaledElapsed = elapsedMs * this.speedMultiplier;
-            ticksToAdvance = Math.floor(scaledElapsed / this.tickIntervalMs);
-            if (ticksToAdvance <= 0) return;
-
-            const leftoverScaled = scaledElapsed - ticksToAdvance * this.tickIntervalMs;
-            const leftoverReal = leftoverScaled / this.speedMultiplier;
-            this.lastUpdatedAt = now - leftoverReal;
-        }
+    advance(deltaTime: number) {
+        if (!this.isActive) return;
+        
+        // 根据 deltaTime 和 speedMultiplier 计算推进的 tick 数
+        const scaledElapsed = deltaTime * this.speedMultiplier;
+        const ticksToAdvance = Math.floor(scaledElapsed / this.tickIntervalMs);
+        
+        if (ticksToAdvance <= 0) return;
 
         this.applyTickAdvance(ticksToAdvance);
     }
